@@ -1,97 +1,118 @@
-from pypdf import PdfReader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
-import chromadb
-reader = PdfReader("documents/ai_notes.pdf")
+import os
 
-text = ""
-
-for page in reader.pages:
-
-    page_text = page.extract_text()
-
-    if page_text:
-        text += page_text
+from utils.pdf_reader import read_pdf
+from utils.chunking import create_chunks
+from utils.embeddings import generate_embeddings
+from utils.vector_db import store_in_chromadb
+from utils.vector_db import show_database
+from utils.retriever import semantic_search
+from utils.prompt_builder import build_prompt
+from utils.openrouter_llm import generate_answer
 
 
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
-    chunk_overlap=100
-)
-
-chunks = splitter.split_text(text)
-
-print(f"\nTotal Chunks: {len(chunks)}")
-
-print("\nLoading Model...")
-
-model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
-
-print("Model Loaded!")
-
-
-client = chromadb.PersistentClient(
-    path="data/chroma_db"
-)
-
-collection = client.get_or_create_collection(
-    name="ai_notes"
-)
-
-print("\nCreating Embeddings...")
-
-embeddings = model.encode(chunks)
-
-print("Embeddings Shape:", embeddings.shape)
-
-
-
-print("\nAdding documents to ChromaDB...")
-
-ids = [
-    f"chunk_{i}"
-    for i in range(len(chunks))
-]
-
-collection.add(
-    ids=ids,
-    documents=chunks,
-    embeddings=embeddings.tolist()
-)
-
-print("ChromaDB Index Created")
-print("Vectors Stored:", collection.count())
-
-query = input("\nAsk Question: ")
-
-query_embedding = model.encode(
-    [query]
-)[0]
-
-results = collection.query(
-    query_embeddings=[
-        query_embedding.tolist()
-    ],
-    n_results=3
-)
-
-print("\nTop Results\n")
-
-documents = results["documents"][0]
-distances = results["distances"][0]
-
-for rank, (document, distance) in enumerate(
-    zip(documents, distances),
-    start=1
-):
+def main():
 
     print("=" * 60)
-    print(f"RESULT {rank}")
+    print("     AI PDF CHATBOT USING MANUAL RAG")
     print("=" * 60)
 
-    print(document)
+    pdf_path = "data/sample.pdf"
 
-    print("\nDistance:", distance)
-    print()
+    if not os.path.exists(pdf_path):
+
+        print("PDF Not Found!")
+
+        return
+
+    # ==========================================
+    # Step 1 — Read PDF
+    # ==========================================
+
+    text = read_pdf(pdf_path)
+
+    # ==========================================
+    # Step 2 — Create Chunks
+    # ==========================================
+
+    chunks = create_chunks(text)
+
+    print(f"\nTotal Chunks Created: {len(chunks)}")
+
+    # ==========================================
+    # Step 3 — Generate Embeddings
+    # ==========================================
+
+    embeddings = generate_embeddings(chunks)
+
+    # ==========================================
+    # Step 4 — Store in ChromaDB
+    # ==========================================
+
+    collection = store_in_chromadb(
+        chunks,
+        embeddings
+    )
+
+    # ==========================================
+    # Step 5 — Show Database
+    # ==========================================
+
+    show_database(collection)
+
+    # ==========================================
+    # Question / Answer Loop
+    # ==========================================
+
+    while True:
+
+        print("\n" + "=" * 60)
+
+        question = input(
+            "\nAsk Question (exit to quit): "
+        )
+
+        if question.lower().strip() == "exit":
+
+            print("\nExiting chatbot...")
+
+            break
+
+        if not question.strip():
+
+            print("Please enter a question.")
+
+            continue
+
+        # ======================================
+        # Step 6 — Semantic Search
+        # ======================================
+
+        retrieved_chunks = semantic_search(
+            collection,
+            question
+        )
+
+        # ======================================
+        # Step 7 — Build Prompt
+        # ======================================
+
+        prompt = build_prompt(
+            question,
+            retrieved_chunks
+        )
+
+        # ======================================
+        # Step 8 — Generate Answer
+        # ======================================
+
+        answer = generate_answer(prompt)
+
+        print("\n" + "=" * 60)
+        print("ANSWER")
+        print("=" * 60)
+
+        print(answer)
+
+
+if __name__ == "__main__":
+    main()
